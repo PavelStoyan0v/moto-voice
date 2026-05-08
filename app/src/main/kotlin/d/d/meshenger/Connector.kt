@@ -43,6 +43,70 @@ class Connector(
         return AddressUtils.parseInetAddress(address)?.isLinkLocalAddress ?: false
     }
 
+    private fun isTailscaleAddress(address: InetAddress): Boolean {
+        val bytes = address.address
+        return if (bytes.size == 4) {
+            val first = bytes[0].toUByte().toInt()
+            val second = bytes[1].toUByte().toInt()
+            first == 100 && second in 64..127 // 100.64.0.0/10
+        } else if (bytes.size == 16) {
+            bytes[0].toUByte().toInt() == 0xfd
+                && bytes[1].toUByte().toInt() == 0x7a
+                && bytes[2].toUByte().toInt() == 0x11
+                && bytes[3].toUByte().toInt() == 0x5c
+                && bytes[4].toUByte().toInt() == 0xa1
+                && bytes[5].toUByte().toInt() == 0xe0
+        } else {
+            false
+        }
+    }
+
+    private fun hasTailscaleConnectivity(networkInterfaces: List<NetworkInterface>): Boolean {
+        for (nif in networkInterfaces) {
+            if (nif.isLoopback || AddressUtils.ignoreDeviceByName(nif.name)) {
+                continue
+            }
+
+            for (ia in nif.interfaceAddresses) {
+                val address = ia.address ?: continue
+                if (!address.isLoopbackAddress && isTailscaleAddress(address)) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private fun handleConnectException(address: InetSocketAddress, e: Exception) {
+        when (e) {
+            is SocketTimeoutException -> {
+                // no connection
+                Log.d(this, "connect() socket has thrown SocketTimeoutException for address=$address")
+                socketTimeoutException = true
+            }
+            is ConnectException -> {
+                // device is online, but does not listen on the given port
+                Log.d(this, "connect() socket has thrown ConnectException for address=$address")
+
+                if (" ENETUNREACH " in e.toString()) {
+                    networkNotReachable = true
+                } else {
+                    connectException = true
+                }
+            }
+            is UnknownHostException -> {
+                // hostname did not resolve
+                Log.d(this, "connect() socket has thrown UnknownHostException for address=$address")
+                unknownHostException = true
+            }
+            else -> {
+                Log.d(this, "connect() socket has thrown Exception for address=$address")
+                exception = true
+            }
+        }
+    }
+
     private fun getAllSocketAddresses(contact: Contact): List<InetSocketAddress> {
         val port = MainService.SERVER_PORT
         val addresses = mutableListOf<InetSocketAddress>()
@@ -54,6 +118,7 @@ class Connector(
         }
 
         val ownInterfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+        val preferTailscaleAddresses = hasTailscaleConnectivity(ownInterfaces)
 
         for (address in contact.addresses) {
             val socketAddress = AddressUtils.stringToInetSocketAddress(address, port) ?: continue
@@ -87,7 +152,9 @@ class Connector(
             )
         }
 
-        return addresses.distinctBy { it.hostString }.sortedWith(InetSocketAddressComparator(lastWorkingAddress))
+        return addresses
+            .distinctBy { it.hostString }
+            .sortedWith(InetSocketAddressComparator(lastWorkingAddress, preferTailscaleAddresses))
     }
 
 
@@ -121,32 +188,22 @@ class Connector(
 
                 try {
                     if (address.isUnresolved) {
-                        for (resolvedAddress in InetAddress.getAllByName(address.hostString)) {
-                            return createSocket(InetSocketAddress(resolvedAddress, address.port))
+                        val resolvedAddresses = InetAddress.getAllByName(address.hostString)
+                        for (resolvedAddress in resolvedAddresses) {
+                            val resolvedSocketAddress = InetSocketAddress(resolvedAddress, address.port)
+                            try {
+                                return createSocket(resolvedSocketAddress)
+                            } catch (e: Exception) {
+                                handleConnectException(resolvedSocketAddress, e)
+                            }
                         }
                     } else {
                         return createSocket(address)
                     }
-                } catch (e: SocketTimeoutException) {
-                    // no connection
-                    Log.d(this, "connect() socket has thrown SocketTimeoutException for address=$address")
-                    socketTimeoutException = true
-                } catch (e: ConnectException) {
-                    // device is online, but does not listen on the given port
-                    Log.d(this, "connect() socket has thrown ConnectException for address=$address")
-
-                    if (" ENETUNREACH " in e.toString()) {
-                        networkNotReachable = true
-                    } else {
-                        connectException = true
-                    }
                 } catch (e: UnknownHostException) {
-                    // hostname did not resolve
-                    Log.d(this, "connect() socket has thrown UnknownHostException for address=$address")
-                    unknownHostException = true
+                    handleConnectException(address, e)
                 } catch (e: Exception) {
-                    Log.d(this, "connect() socket has thrown Exception for address=$address")
-                    exception = true
+                    handleConnectException(address, e)
                 }
             }
         }

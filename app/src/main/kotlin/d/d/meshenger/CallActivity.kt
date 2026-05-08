@@ -24,6 +24,9 @@ import androidx.core.content.res.ResourcesCompat
 import d.d.meshenger.call.*
 import d.d.meshenger.call.RTCPeerConnection.CallState
 import org.webrtc.*
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.*
 
@@ -52,6 +55,7 @@ class CallActivity : BaseActivity(), RTCCall.CallContext {
 
     // call info texts
     private lateinit var callStatus: TextView
+    private lateinit var callRoute: TextView
     private lateinit var callStats: TextView
     private lateinit var callAddress: TextView
     private lateinit var callName: TextView
@@ -413,6 +417,27 @@ class CallActivity : BaseActivity(), RTCCall.CallContext {
             }
 
             callAddress.text = String.format(formatString, addressString)
+            callRoute.visibility = if (isTailscaleAddress(address.address)) View.VISIBLE else View.GONE
+        }
+    }
+
+    private fun isTailscaleAddress(address: InetAddress?): Boolean {
+        return when (address) {
+            is Inet4Address -> {
+                val bytes = address.address
+                bytes[0].toInt() == 100 && (bytes[1].toInt() and 0xC0) == 0x40
+            }
+            is Inet6Address -> {
+                val bytes = address.address
+                bytes.size >= 6
+                    && bytes[0] == 0xfd.toByte()
+                    && bytes[1] == 0x7a.toByte()
+                    && bytes[2] == 0x11.toByte()
+                    && bytes[3] == 0x5c.toByte()
+                    && bytes[4] == 0xa1.toByte()
+                    && bytes[5] == 0xe0.toByte()
+            }
+            else -> false
         }
     }
 
@@ -437,6 +462,7 @@ class CallActivity : BaseActivity(), RTCCall.CallContext {
         //window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         callStatus = findViewById(R.id.callStatus)
+        callRoute = findViewById(R.id.callRoute)
         callStats = findViewById(R.id.callStats)
         callAddress = findViewById(R.id.callAddress)
         callName = findViewById(R.id.callName)

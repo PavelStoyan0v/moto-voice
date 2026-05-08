@@ -147,12 +147,12 @@ class Database {
 
         fun toData(db: Database, password: String?): ByteArray? {
             val obj = toJSON(db)
-            var dbdata = obj.toString().toByteArray()
+            var dbdata: ByteArray? = obj.toString().toByteArray()
 
             // encrypt database
             if (!password.isNullOrEmpty()) {
                 Log.d(this, "Encrypt database")
-                dbdata = encryptDatabase(dbdata, password.toByteArray())
+                dbdata = encryptDatabase(dbdata, password.toByteArray()) ?: return null
             }
             Log.d(this, "Stored ${db.contacts.contactList.size} contacts")
             Log.d(this, "Stored ${db.events.eventList.size} events")
