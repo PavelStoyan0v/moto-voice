@@ -9,7 +9,28 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 
 // sort addresses by scope (link-local address, hostname, ... , global IP address, DNS domain)
-class InetSocketAddressComparator(val lastWorkingAddress: InetSocketAddress? = null) : Comparator<InetSocketAddress> {
+class InetSocketAddressComparator(
+    val lastWorkingAddress: InetSocketAddress? = null,
+    private val preferTailscaleAddresses: Boolean = false
+) : Comparator<InetSocketAddress> {
+    private fun isTailscaleAddress(address: InetAddress): Boolean {
+        val bytes = address.address
+        return if (bytes.size == 4) {
+            val first = bytes[0].toUByte().toInt()
+            val second = bytes[1].toUByte().toInt()
+            first == 100 && second in 64..127 // 100.64.0.0/10
+        } else if (bytes.size == 16) {
+            bytes[0].toUByte().toInt() == 0xfd
+                && bytes[1].toUByte().toInt() == 0x7a
+                && bytes[2].toUByte().toInt() == 0x11
+                && bytes[3].toUByte().toInt() == 0x5c
+                && bytes[4].toUByte().toInt() == 0xa1
+                && bytes[5].toUByte().toInt() == 0xe0
+        } else {
+            false
+        }
+    }
+
     private fun isPrivateAddress(address: InetAddress): Boolean {
         val bytes = address.address
          if (bytes.size == 4) {
@@ -40,6 +61,8 @@ class InetSocketAddressComparator(val lastWorkingAddress: InetSocketAddress? = n
             if (address.address.isLinkLocalAddress) {
                 //println("is link local: ${address}")
                 return 2
+            } else if (preferTailscaleAddresses && isTailscaleAddress(address.address)) {
+                return 3
             } else if (isPrivateAddress(address.address)) {
                 return 4
             } else {
